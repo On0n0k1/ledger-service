@@ -1,0 +1,39 @@
+services:
+  ledger-service:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      LEDGER_STORE: dynamodb
+      LEDGER_EVENT_PUBLISHER: kafka
+      AWS_ACCESS_KEY_ID: fake
+      AWS_SECRET_ACCESS_KEY: fake
+      AWS_REGION: us-east-1
+      DYNAMODB_HOSTNAME: dynamodb-local
+      DYNAMODB_PORT: "8000"
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    depends_on:
+      - dynamodb-local
+      - redpanda
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    ports:
+      - "8000:8000"
+
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --smp
+      - "1"
+      - --overprovisioned
+      - --node-id
+      - "0"
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
