@@ -8,7 +8,8 @@
         com.cognitect.aws/endpoints {:mvn/version "871.2.53.2"}
         com.cognitect.aws/dynamodb {:mvn/version "871.2.51.4"}
         org.apache.kafka/kafka-clients {:mvn/version "4.2.1"}
-        org.clojure/data.json {:mvn/version "2.5.1"}}
+        org.clojure/data.json {:mvn/version "2.5.1"}
+        clj-commons/iapetos {:mvn/version "0.1.15"}}
  :aliases
  {:run {:main-opts ["-m" "ledger.main"]}
   :test {:extra-paths ["test"]

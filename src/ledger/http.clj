@@ -2,7 +2,9 @@
   (:require [reitit.ring :as ring]
             [reitit.ring.middleware.muuntaja :as muuntaja-mw]
             [muuntaja.core :as muuntaja]
+            [iapetos.collector.ring :as metrics]
             [ledger.domain.ledger :as domain]
+            [ledger.metrics :as ledger-metrics]
             [ledger.ports.ledger-store :as store]
             [ledger.ports.event-publisher :as pub]))
 
@@ -63,12 +65,13 @@
 
 (defn app
   [ledger-store publisher]
-  (ring/ring-handler
-    (ring/router
-      [["/health" {:get {:handler health-handler}}]
-       ["/accounts/:id/balance" {:get {:handler (balance-handler ledger-store)}}]
-       ["/accounts/:id/deposit" {:post {:handler (deposit-handler ledger-store publisher)}}]
-       ["/accounts/:id/withdraw" {:post {:handler (withdraw-handler ledger-store publisher)}}]]
-      {:data {:muuntaja muuntaja/instance
-              :middleware [muuntaja-mw/format-middleware]}})
-    (ring/create-default-handler)))
+  (-> (ring/ring-handler
+        (ring/router
+          [["/health" {:get {:handler health-handler}}]
+           ["/accounts/:id/balance" {:get {:handler (balance-handler ledger-store)}}]
+           ["/accounts/:id/deposit" {:post {:handler (deposit-handler ledger-store publisher)}}]
+           ["/accounts/:id/withdraw" {:post {:handler (withdraw-handler ledger-store publisher)}}]]
+          {:data {:muuntaja muuntaja/instance
+                  :middleware [muuntaja-mw/format-middleware]}})
+        (ring/create-default-handler))
+      (metrics/wrap-metrics ledger-metrics/registry {:path "/metrics"})))
