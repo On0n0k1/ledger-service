@@ -6,7 +6,9 @@
         metosin/muuntaja {:mvn/version "0.6.10"}
         com.cognitect.aws/api {:mvn/version "0.8.741"}
         com.cognitect.aws/endpoints {:mvn/version "871.2.53.2"}
-        com.cognitect.aws/dynamodb {:mvn/version "871.2.51.4"}}
+        com.cognitect.aws/dynamodb {:mvn/version "871.2.51.4"}
+        org.apache.kafka/kafka-clients {:mvn/version "4.2.1"}
+        org.clojure/data.json {:mvn/version "2.5.1"}}
  :aliases
  {:run {:main-opts ["-m" "ledger.main"]}
   :test {:extra-paths ["test"]

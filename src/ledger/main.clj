@@ -2,6 +2,7 @@
   (:require [ledger.http :as http]
             [ledger.adapters.in-memory :as in-memory]
             [ledger.adapters.dynamodb :as dynamodb]
+            [ledger.adapters.kafka :as kafka]
             [ring.adapter.jetty :as jetty])
   (:gen-class))
 
@@ -22,7 +23,19 @@
     (dynamodb-store)
     (in-memory/new-store)))
 
+(defn- kafka-publisher
+  []
+  (kafka/new-publisher
+    (kafka/producer {:bootstrap-servers (or (System/getenv "KAFKA_BOOTSTRAP_SERVERS")
+                                             "localhost:9092")})))
+
+(defn- event-publisher
+  []
+  (if (= "kafka" (System/getenv "LEDGER_EVENT_PUBLISHER"))
+    (kafka-publisher)
+    (in-memory/new-publisher)))
+
 (defn -main
   [& _args]
-  (jetty/run-jetty (http/app (ledger-store) (in-memory/new-publisher))
+  (jetty/run-jetty (http/app (ledger-store) (event-publisher))
                     {:port 3000 :join? true}))
