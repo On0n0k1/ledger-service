@@ -1,22 +1,64 @@
 # ledger-service
 
 A small account ledger microservice — deposits, withdrawals, balance
-lookups — built with hexagonal architecture in Clojure. Domain logic is
-pure and has no idea whether it's backed by an in-memory atom or a real
-DynamoDB table; persistence and event publishing are swappable adapters
-behind protocols.
+lookups — built to be a compact, complete example of hexagonal
+architecture: pure domain logic, protocol-defined ports, and swappable
+adapters for real infrastructure (DynamoDB, Kafka).
 
-## Architecture
+## Why hexagonal architecture
+
+The domain logic (`ledger.domain.ledger`) has no idea whether it's backed
+by an in-memory atom or a real DynamoDB table. It takes and returns plain
+maps, has zero I/O, and is fully unit-testable without Docker, AWS
+credentials, or a running broker. Everything that touches the outside
+world — persistence, event publishing — is expressed as a protocol
+(`ledger.ports.*`), with concrete adapters plugged in at the edge
+(`ledger.main`).
+
+The payoff shows up concretely in the commit history: the DynamoDB
+adapter and the Kafka adapter were each added without a single line of
+`ledger.domain.ledger` or `ledger.http` changing. That's not a
+theoretical benefit of the architecture — it's the actual diff.
+
+```
+                      ┌─────────────────────────┐
+                      │   ledger.http (Reitit)   │
+                      │  routes → calls ports    │
+                      └────────────┬─────────────┘
+                                   │
+                      ┌────────────▼─────────────┐
+                      │  ledger.domain.ledger     │
+                      │  pure functions, no I/O   │
+                      │  deposit / withdraw /     │
+                      │  balance                  │
+                      └────────────┬─────────────┘
+                                   │ (via protocols)
+              ┌────────────────────┼────────────────────┐
+              │                    │                     │
+   ┌──────────▼─────────┐ ┌────────▼────────┐            
+   │   LedgerStore       │ │ EventPublisher  │            
+   │   (port/protocol)   │ │ (port/protocol) │            
+   └──────────┬─────────┘ └────────┬────────┘            
+              │                    │
+     ┌────────┴────────┐  ┌────────┴────────┐
+     │                 │  │                 │
+┌────▼─────┐    ┌──────▼────┐  ┌───────▼──────┐
+│ in-memory│    │ DynamoDB  │  │  in-memory /  │
+│  (atom)  │    │ (Local or │  │  Kafka /      │
+│          │    │ real AWS) │  │  Redpanda     │
+└──────────┘    └───────────┘  └───────────────┘
+```
+
+## Layout
 
 ```
 src/ledger/domain     pure business logic (deposit/withdraw/balance), no I/O
 src/ledger/ports      protocols: LedgerStore, EventPublisher
 src/ledger/adapters   concrete implementations of the ports
 src/ledger/http.clj   Reitit routes + handlers, calling domain via ports
+src/ledger/metrics.clj Prometheus registry (request counts, latency)
 src/ledger/main.clj   entrypoint: picks adapters, starts the HTTP server
 ```
-
-Two adapters exist per port so far:
 
 | Port            | Adapters                          |
 |-----------------|------------------------------------|
@@ -28,25 +70,34 @@ Two adapters exist per port so far:
 Requires the [Clojure CLI](https://clojure.org/guides/install_clojure).
 
 ```bash
-clj -M:run
+clojure -M:run
 ```
 
 By default this uses the in-memory adapters — no external services needed.
 
-### Against DynamoDB Local
+### With Docker Compose (real DynamoDB Local + Redpanda)
+
+```bash
+docker compose up --build
+```
+
+Wires the service to DynamoDB Local and Redpanda automatically — see
+`docker-compose.yml` for the environment variables it sets.
+
+### Manually, against DynamoDB Local
 
 ```bash
 docker run -d -p 8000:8000 amazon/dynamodb-local
 
 AWS_ACCESS_KEY_ID=fake AWS_SECRET_ACCESS_KEY=fake AWS_REGION=us-east-1 \
-  LEDGER_STORE=dynamodb clj -M:run
+  LEDGER_STORE=dynamodb clojure -M:run
 ```
 
 The table (`ledger-accounts`) is created automatically on startup if it
 doesn't exist — dev/test convenience only, not how a real deployment would
 provision infrastructure.
 
-### Against Kafka / Redpanda
+### Manually, against Kafka / Redpanda
 
 ```bash
 docker run -d -p 9092:9092 redpandadata/redpanda start --smp 1 \
@@ -54,7 +105,7 @@ docker run -d -p 9092:9092 redpandadata/redpanda start --smp 1 \
   --kafka-addr PLAINTEXT://0.0.0.0:9092 \
   --advertise-kafka-addr PLAINTEXT://localhost:9092
 
-LEDGER_EVENT_PUBLISHER=kafka clj -M:run
+LEDGER_EVENT_PUBLISHER=kafka clojure -M:run
 ```
 
 Publishes a `transaction-recorded` event (JSON) to that topic on every
@@ -68,6 +119,7 @@ Both adapters are selected independently, so any combination of
 | Method | Path                        | Body               | Description                    |
 |--------|-----------------------------|--------------------|--------------------------------|
 | GET    | `/health`                   | —                  | Liveness check                 |
+| GET    | `/metrics`                  | —                  | Prometheus exposition (request counts, latency) |
 | GET    | `/accounts/:id/balance`     | —                  | Current balance (404 if unknown) |
 | POST   | `/accounts/:id/deposit`     | `{"amount": 100}`  | Deposit; creates the account if it doesn't exist |
 | POST   | `/accounts/:id/withdraw`    | `{"amount": 100}`  | Withdraw; 400 on insufficient funds or invalid amount |
@@ -81,11 +133,19 @@ curl localhost:3000/accounts/abc/balance
 ## Testing
 
 ```bash
-clj -M:test
+clojure -M:test
 ```
 
 Currently covers the pure domain logic (`ledger.domain.ledger`): deposits,
-withdrawals, invalid-amount rejection, insufficient-funds rejection.
+withdrawals, invalid-amount rejection, insufficient-funds rejection. Runs
+in CI (`.github/workflows/ci.yml`) on every push and PR to `main`, followed
+by a Docker build (and, on `main`, a push to GHCR).
+
+## Deployment
+
+- `Dockerfile` — single-stage image on the official Clojure tools-deps base
+- `docker-compose.yml` — service + DynamoDB Local + Redpanda, wired together for local dev
+- `k8s/deployment.yaml`, `k8s/service.yaml` — a plausible Kubernetes deployment (2 replicas, `/health` readiness and liveness probes, AWS credentials from a Secret). Written to be correct and reviewable, not to actually be applied to a cluster — there's no cluster behind this project.
 
 ## Implemented so far
 
@@ -94,12 +154,33 @@ withdrawals, invalid-amount rejection, insufficient-funds rejection.
 - In-memory adapters for both, wired end-to-end via HTTP
 - DynamoDB (Local-compatible) `LedgerStore` adapter
 - Kafka-backed `EventPublisher` adapter
+- Prometheus `/metrics` (request counts, latency histograms)
+- Dockerfile + docker-compose (service, DynamoDB Local, Redpanda)
+- CI: test → build → push image to GHCR on `main`
+- Kubernetes manifests (deployment + service)
 - Unit tests for the domain logic
 
-## Not yet implemented
+## What I'd do with more time
 
-- Prometheus `/metrics` endpoint
-- Dockerfile / `docker-compose.yml` tying the service + DynamoDB Local +
-  Redpanda together
-- CI (GitHub Actions): test → build → image
-- Kubernetes manifests (`deployment.yaml` / `service.yaml`)
+- **Datomic alongside DynamoDB.** The posting calls out both; DynamoDB
+  gives fast key-value lookups for current balance, but Datomic's
+  bitemporal model (querying "what did this account look like as of last
+  Tuesday, as we believed it at the time") is a much more natural fit for
+  a ledger's actual requirement — a full, queryable transaction history,
+  not just current state. I'd add it as a second `LedgerStore`
+  implementation, likely used for the audit/history read path while
+  DynamoDB serves the hot balance-lookup path.
+- **A real Kubernetes deployment**, including a Helm chart or Kustomize
+  overlays per environment, an actual EKS cluster, and IAM Roles for
+  Service Accounts (IRSA) instead of the static AWS credentials the
+  manifest currently pulls from a Secret.
+- **Finagle-style RPC** between services if this ledger were split into
+  collaborators (e.g. a separate account/identity service) — right now
+  everything is a single deployable, so there's no inter-service call to
+  make.
+- **Idempotency keys** on deposit/withdraw — right now a retried request
+  double-applies. A real payments path needs a client-supplied request ID
+  the store can dedupe on.
+- **Kafka producer error handling** — `.send` is currently fire-and-forget;
+  a production publisher would check delivery acks or attach a callback
+  rather than silently drop failures.

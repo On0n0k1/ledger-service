@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-service
+  labels:
+    app: ledger-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ledger-service
+  template:
+    metadata:
+      labels:
+        app: ledger-service
+    spec:
+      containers:
+        - name: ledger-service
+          image: ghcr.io/on0n0k1/ledger-service:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: LEDGER_STORE
+              value: "dynamodb"
+            - name: LEDGER_EVENT_PUBLISHER
+              value: "kafka"
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-bootstrap.kafka.svc.cluster.local:9092"
+            # Real AWS credentials come from a Secret, not literal values.
+            # In an actual EKS deployment this would more likely be IAM
+            # Roles for Service Accounts (IRSA) instead of a Secret at all.
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: ledger-service-aws-credentials
+                  key: access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ledger-service-aws-credentials
+                  key: secret-access-key
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
